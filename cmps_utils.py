@@ -42,6 +42,27 @@ def compute_single_ph_proj(state: tn.onedim.MatrixProductState) -> np.ndarray:
     return np.flip(single_ph_proj)
 
 
+def compute_photon_number_exp(
+        state: tn.onedim.MatrixProductState) -> np.ndarray:
+    """Computes the expectation number of photons with position.
+
+    Args:
+        state: The state being considered as a matrix product state.
+
+    Returns:
+        The mean number of photons in the emitted state as a function of time.
+    """
+    # We assume that the number of photons in each bin is restricted to 0 or 1.
+    num_op = tn.Tensor(np.array([[0, 0], [0, 1]], dtype=complex))
+
+    # Compute the expectation value of the number of photons.
+    ph_num = []
+    for site in range(state.nsites):
+        ph_num.append(state.expval(num_op, site))
+
+    return np.flip(ph_num)
+
+
 def single_ph_state_as_mps(
         psi: np.ndarray,
         bond_dim: Optional[int] = 2,
@@ -82,9 +103,3 @@ def single_ph_state_as_mps(
     tensors.append(tn.Tensor(tensor, labels=["left", "right", "phys"]))
 
     return tn.onedim.MatrixProductState(tensors)
-
-
-
-def compute_two_ph_proj(state: tn.onedim.MatrixProductState) -> np.array:
-    pass
-

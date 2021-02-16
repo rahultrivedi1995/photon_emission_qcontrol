@@ -1,3 +1,4 @@
+"""Module to implement pulses applied as classical controls."""
 import abc
 import numpy as np
 
@@ -40,39 +41,4 @@ class GaussianPulse(Pulse):
         return self._amp * np.exp(
                 -(t - self._t_cen)**2 / self._t_width**2)
 
-
-class ParameterizedPulse(Pulse):
-    @abc.abstractmethod
-    def update(self, vec: np.ndarray) -> None:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def state(self) -> np.ndarray:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_gradient(self) -> np.ndarray:
-        raise NotImplementedError()
-
-
-class DirectParameterizedPulse(Pulse):
-    def __init__(self,
-                 num_tsteps: int,
-                 bounds: Tuple[float, float],
-                 init_state: Optional[np.ndarray] = None) -> None:
-        self._num_tsteps = num_tsteps
-        self._bounds = bounds
-        if init_state is None:
-            self._state = np.random.uniform(num_tsteps, bounds[0], bounds[1])
-        else:
-            self._state = init_state
-
-    def state(self) -> np.ndarray:
-        return self._state
-
-    def update(self, vec: np.ndarray) -> None:
-        self._state = vec
-
-    def get_gradient(self) -> np.ndarray:
-        return np.eye(self._num_tsteps, dtype=None)
 

@@ -114,13 +114,16 @@ class OqsSystem(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def get_init_state(self) -> np.ndarray:
+    def get_initial_state(self) -> np.ndarray:
+        """Get the initial state corresponding to the open quantum system."""
         raise NotImplementedError()
 
     @abc.abstractmethod
     def get_final_state(self) -> np.ndarray:
+        """Get the final state corresponding to the open quantum system."""
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_decay_op(self) -> np.ndarray:
         """Get the decay operator corresponding to the localized system."""
         raise NotImplementedError()
@@ -160,16 +163,17 @@ class OqsSystem(metaclass=abc.ABCMeta):
         # This will be reused repeatedly.
         decay_tensor = np.zeros((self.sys_dim, self.sys_dim, self.bin_dim - 1),
                                 dtype=complex)
-        decay_tensor[:, :, 0] = self.get_decay_op() * self.dt
+        decay_tensor[:, :, 0] = self.get_decay_op() * np.sqrt(self.dt)
         for n in range(1, self.bin_dim - 1):
             decay_tensor[:, :, n] = (decay_tensor[:, :, n - 1] @
-                                     self.get_decay_op()) * self.dt / n
+                                     self.get_decay_op()) * np.sqrt(self.dt) / n
 
-        # Tensors for the MPS for the current state.
+        # Tensors for the MPS for the current state. Right now we ignore the
+        # the boundary conditions.
         tensors = []
         # Setup the tensors corresponding to the second to second-to-last
         # time steps.
-        for tstep in range(self._num_tsteps - 1, 0, -1):
+        for tstep in range(self._num_tsteps - 1, -1, -1):
             time = (tstep + 0.5) * self.dt
             tensor = np.zeros((self.sys_dim, self.sys_dim, self.bin_dim),
                               dtype=complex)
@@ -177,77 +181,58 @@ class OqsSystem(metaclass=abc.ABCMeta):
                                1.0j * self.dt * self.get_hamiltonian(
                                     pulses, time))
             tensor[:, :, 1:] = decay_tensor
-            tensors.append(tn.Tensor(tensor,
-                                     labels=["left", "right", "phys"]))
-        # Setup the last tensor. We note that this is a column vector.
-        init_state
-        tensor = np.zeros((self.sys_dim, 1, self.bin_dim),
-                          dtype=complex)
-        tensor[:, 0, 0] = (np.eye(self.sys_dim, dtype=complex) -
-                           1.0j * self.dt *
-                           self.get_hamiltonian(
-                               pulses,
-                               0.5 * self.dt))[:, -1]
-        tensor[:, 0, 1:] = decay_tensor[:, -1, :]
-        tensors.append(tn.Tensor(tensor, labels=["left", "right", "phys"]))
+            tensors.append(tensor)
+        # Modify the first vector with a boundary condition corresponding to the
+        # the final state.
+        final_state = self.get_final_state()
+        tensors[0] = np.sum(final_state[:, np.newaxis, np.newaxis] *
+                            tensors[0], axis=0)[np.newaxis, :, :]
+        # Modify the last vector with a boundary condition corresponding to the
+        # initial state.
+        init_state = self.get_initial_state()
+        tensors[-1] = np.sum(init_state[np.newaxis, :, np.newaxis] *
+                             tensors[-1], axis=1)[:, np.newaxis, :]
+        return tn.onedim.MatrixProductState(
+                    [tn.Tensor(t, labels=["left", "right", "phys"])
+                     for t in tensors])
 
-        return tn.onedim.MatrixProductState(tensors)
+    def get_inner_product(
+            self,
+            target_mps: tn.onedim.MatrixProductState,
+            pulses: List[pulse.Pulse]) -> complex:
+        """Compute the inner product of the output photons with given MPS."""
+        mps_state = self.get_mps(pulses)
+        return tn.onedim.inner_product_mps(target_mps, mps_state)
+
+    def _get_deriv_mps(
+            self,
+            index: int,
+            pulses: List[pulse.Pulse]) -> tn.onedim.MatrixProductState:
+        """Constructs a matrix product state by derivatives of tensors."""
+        tensors = []
+        # We first ignore the boundary conditions and compute the resulting
+        # Matrix product state.
+        for tstep in range(self._num_tsteps - 1, -1, -1):
+            tensor = np.zeros((self.sys_dim, self.sys_dim, self.bin_dim),
+                              dtype=complex)
+            tensor[:, :, 0] = -1.0j * self.dt * self.get_pert_operator(index)
+            tensors.append(tensor)
+
+        # Modify the first vector with a boundary condition corresponding to the
+        # final state.
+        final_state = self.get_final_state()
+        tensors[0] = np.sum(final_state[:, np.newaxis, np.newaxis] *
+                            tensors[0], axis=0)[np.newaxis, :, :]
+        # Modify the last vector with a boundary condition corresponding to the
+        # initial state.
+        initial_state = self.get_initial_state()
+        tensors[-1] = np.sum(initial_state[np.newaxis, :, np.newaxis] *
+                             tensors[-1], axis=1)[:, np.newaxis, :]
+        return tn.onedim.MatrixProductState(
+                    [tn.Tensor(t, labels=["left", "right", "phys"])
+                     for t in tensors])
 
     def get_inner_prod_gradient(
-            self,
-            target_state: tn.onedim.MatrixProductState,
-            pulses: List[pulse.Pulse],
-        ) -> np.ndarray:
-        """Calculate the tangent MPS corresponding to derivative.
-
-        Args:
-            target_state: The state with which to compute the overlap.
-            params: The parameters at which to compute the gradient.
-            index: The index with respect to which to compute the gradient.
-
-        Return:
-            The gradient of the matrix-product state with respect to the
-            parameters.
-        """
-        mps_state = self.get_mps(pulses)
-        grads = []
-        for index in range(self._num_params):
-            # Extract the perturbation operator corresponding to the current
-            # parameter.
-            pert_op = self.get_pert_operator(index)
-            # Get the MPS state corresponding to the current parameters.
-            grads.append([])
-            # Handle the gradient due to the first tensor.
-            mps_state_copy = mps_state.copy()
-            mps_state_copy.data[0].data[0, :, 0] = (
-                    -1.0j * self.dt * pert_op[-1, :])
-            mps_state_copy.data[0].data[0, :, 1] = 0
-            grads[-1].append(tn.onedim.inner_product_mps(
-                        target_state, mps_state_copy))
-            # Handle the gradient at the intermediate terms.
-            for tstep in range(1, self._num_tsteps - 1):
-                mps_state_copy = mps_state.copy()
-                mps_state_copy.data[tstep].data[:, :, 0] = (
-                        -1.0j * self.dt * pert_op)
-                mps_state_copy.data[tstep].data[:, :, 1] = 0
-                grads[-1].append(tn.onedim.inner_product_mps(
-                            target_state, mps_state_copy))
-            # Handle the gradient due to the last tensor.
-            mps_state_copy = mps_state.copy()
-            mps_state_copy.data[-1].data[:, 0, 0] = (
-                    -1.0j * self.dt * pert_op[:, -1])
-            mps_state_copy.data[-1].data[:, 0, 1] = 0
-            grads[-1].append(tn.onedim.inner_product_mps(
-                        target_state, mps_state_copy))
-
-        return grads
-
-    def _get_deriv_tensor(
-            self,
-
-
-
-    def get_inner_prod_gradient_adjoint(
             self,
             target_state: tn.onedim.MatrixProductState,
             pulses: List[pulse.Pulse]) -> np.ndarray:
@@ -260,81 +245,37 @@ class OqsSystem(metaclass=abc.ABCMeta):
         # cascaded transfer matrices corresponding to the MPS state.
         forward_tmats = [transfer_matrices[0]]
         backward_tmats = [transfer_matrices[-1]]
-        for k in range(1, self._num_tsteps):
+        for k in range(1, self._num_tsteps - 1):
             forward_tmats.append(
-                    transfer_matrices[k] @ forward_tmats[-1])
+                    forward_tmats[-1] @ transfer_matrices[k])
             backward_tmats.append(
-                    backward_tmats[-1] @
-                    transfer_matrices[self._num_tsteps - k - 1])
+                    transfer_matrices[self._num_tsteps - k - 1] @
+                    backward_tmats[-1])
 
         # Compute the gradients.
         grads = []
         for index in range(self._num_params):
-            grads.append([])
-            # Extract the perturbation operator.
-            pert_op = self.get_pert_operator(index)
-            # Handle the gradient due to the first tensor.
-            deriv_tensor = np.zeros(
-                    (1, self.sys_dim, self.bin_dim),
-                    dtype=complex)
-            deriv_tensor[0, :, 0] = -1.0j * dt * pert_op[-1, :]
-            deriv_tmat = np.kron(target_state.data[0].data, deriv_tensor)
-            grads[-1].append(deriv_tmat
+            grad_index = []
+            # Calculate the transfer matrices corresponding to the derivative
+            # matrix product state.
+            deriv_mps_state = self._get_deriv_mps(index, pulses)
+            transfer_matrices_deriv = _get_transfer_matrix_list(
+                    target_state, deriv_mps_state)
+
+            # Compute the gradient using the adjoint trick. Here we iterate over
+            # the site.
+            for site in range(self._num_tsteps):
+                if site == 0:
+                    deriv = transfer_matrices_deriv[0] @ backward_tmats[-1]
+                elif site == self._num_tsteps - 1:
+                    deriv = forward_tmats[-1] @ transfer_matrices_deriv[-1]
+                else:
+                    deriv = (forward_tmats[site - 1] @
+                             transfer_matrices_deriv[site] @
+                             backward_tmats[-1 - site])
+                grad_index.append(deriv[0, 0])
+            grads.append(np.flip(grad_index))
+        return grads
 
 
 
-class DrivenModulatedTLS(OqsSystem):
-    """Implements a driven modulated two-level system.
-
-    This is a two-level system with a Hamiltonian
-      H_s(delta, Omega) = (delta * sigma.dag() * sigma +
-                           Omega_x * sigma_x + Omega_y * sigma_y
-    where `delta` is the detuning of the two-level system from the laser
-    frequency and `Omega_x, Omega_y` are the quadratures of the laser pulse.
-    All of `delta`, `Omega_x` and `Omega_y` are considered to be control
-    parameters for the two-level system. The coupling operator for the
-    two-level system is assumed to be `sqrt(gamma) * sigma`, where `sigma` is
-    the decay rate.
-    """
-    def __init__(
-            self,
-            dt: float,
-            num_tsteps: int,
-            gamma: float) -> None:
-        """Makes a new `DrivenModulatedTLS` object.
-
-        Args:
-            dt: The time-step to use.
-            num_tsteps: The number of time steps to use in the simulation.
-            gamma: The decay rate of the two-level system into the bath.
-        """
-        super(DrivenModulatedTLS, self).__init__(dt, num_tsteps, 3, 2)
-        self._gamma = gamma
-
-    def get_bg_hamiltonian(self, t: float) -> np.ndarray:
-        """The background effective Hamiltonian for the two-level system.
-
-        This is given by `-0.5j * sigma.dag() * sigma`.
-        """
-        return np.array([[-0.5j * self._gamma, 0], [0, 0]])
-
-    def get_pert_operator(self, ind: int) -> np.ndarray:
-        """Refer to the parent class for documentation.
-
-        We assume that the first parameter is `delta`, the second parameter is
-        `Omega_x` and the third parameter is `Omega_y`.
-        """
-        pert_op = None
-        if ind == 0:
-            pert_op = np.array([[1, 0], [0, 0]])
-        elif ind == 1:
-            pert_op = np.array([[0, 1], [1, 0]])
-        elif ind == 2:
-            pert_op = np.array([[0, -1.0j], [1.0j, 0]])
-        else:
-            raise ValueError("There are only three parameters, recieved "
-                             "index = {}".format(ind))
-        return pert_op
-
-    def get_decay_op(self) -> np.ndarray:
-        return np.sqrt(self._gamma) * np.array([[0, 0], [1, 0]])
