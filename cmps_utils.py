@@ -10,37 +10,30 @@ from typing import Optional
 
 
 def compute_single_ph_proj(state: tn.onedim.MatrixProductState) -> np.ndarray:
-    """Compute the single-photon component of the matrix product state.
-
-    Args:
-        state: The state to be considered expressed as a matrix product state
-            object.
-
-    Returns:
-        The single-photon state as a numpy array.
-    """
     # We first extract the tensors corresponding to the zero and single photons
     # in the time-bins.
     tensors_0 = [state.data[n].data[:, :, 0] for n in range(state.nsites)]
     tensors_1 = [state.data[n].data[:, :, 1] for n in range(state.nsites)]
     # Multiply with all the vacuum tensors except for the first one.
-    tensor_prod_right = tensors_0[1]
-    for t in tensors_0[2:]:
-        tensor_prod_right = tensor_prod_right @ t
-    # We will also maintain products from the left.
-    tensor_prod_left = tensors_0[0]
+    tensor_prod_forward = [tensors_0[0]]
+    tensor_prod_backward = [tensors_0[-1]]
+    for k in range(state.nsites - 1):
+        tensor_prod_forward.append(
+                tensor_prod_forward[-1] @ tensors_0[k + 1])
+        tensor_prod_backward.append(
+                tensors_0[state.nsites - k - 2] @ tensor_prod_backward[-1])
 
     # Calculate the single photon projection.
-    single_ph_proj = [np.trace(tensors_1[0] @ tensor_prod_right)]
-    for tstep in range(1, state.nsites - 1):
-       tensor_prod_right = np.linalg.inv(tensors_0[tstep]) @ tensor_prod_right
+    single_ph_proj = [np.trace(tensors_1[0] @ tensor_prod_backward[-2])]
+    for t in range(1, state.nsites - 1):
        single_ph_proj.append(
-           np.trace(tensor_prod_left @ tensors_1[tstep] @ tensor_prod_right))
-       tensor_prod_left = tensor_prod_left @ tensors_0[tstep]
+           np.trace(tensor_prod_forward[t - 1] @
+                    tensors_1[t] @
+                    tensor_prod_backward[-2 - t]))
+    single_ph_proj.append(
+            np.trace(tensor_prod_forward[-2] @ tensors_1[-1]))
 
-    single_ph_proj.append(np.trace(tensor_prod_left @ tensors_1[-1]))
     return np.flip(single_ph_proj)
-
 
 def compute_photon_number_exp(
         state: tn.onedim.MatrixProductState) -> np.ndarray:

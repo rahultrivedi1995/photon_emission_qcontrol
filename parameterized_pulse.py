@@ -46,8 +46,13 @@ class DirectParameterizedPulse(ParameterizedPulse):
         self._dt = max_time / num_tsteps
         self._bounds = bounds
         if init_state is None:
-            init_state = np.random.uniform(bounds[0], bounds[1], num_tsteps)
+            init_state = np.random.uniform(
+                    bounds[0], bounds[1], num_tsteps + 1)
         self._state = init_state
+
+    def bounds(self) -> List[Tuple[float, float]]:
+        return np.array([(self._bounds[0], self._bounds[1])
+                         for _ in range(self.state().size)], dtype=float)
 
     def state(self) -> np.ndarray:
         """Returns the state of the pulse."""
@@ -64,10 +69,10 @@ class DirectParameterizedPulse(ParameterizedPulse):
         # the pulse length. Outside the pulse length, the pulse is assumed to
         # be 0, so the gradient vanishes.
         time_inds_mod = [t for b, t in zip(bins, time_inds)
-                         if b != 0 or b != self._num_tsteps + 1]
-        bins_mod = [b for b in bins if b != 0 or b != self._num_tsteps + 1]
+                         if b != 0 and b != self._num_tsteps + 1]
+        bins_mod = [b for b in bins if b != 0 and b != self._num_tsteps + 1]
         # Fill in the gradients.
-        grad = np.zeros((self._num_tsteps, times.size), dtype=complex)
+        grad = np.zeros((self._num_tsteps + 1, times.size), dtype=complex)
         grad[np.array(bins_mod), np.array(time_inds_mod)] = 1.0
         return grad
 

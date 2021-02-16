@@ -17,7 +17,7 @@ def _get_transfer_matrix_list(
     transfer_matrices = []
     for site in range(left_mps.nsites):
         left_tensor = left_mps.data[site].data
-        right_tensor = left_mps.data[site].data
+        right_tensor = right_mps.data[site].data
         tensor_prod = [np.kron(left_tensor[:, :, i].conj(),
                                right_tensor[:, :, i])
                        for i in range(left_tensor.shape[-1])]
@@ -203,6 +203,20 @@ class OqsSystem(metaclass=abc.ABCMeta):
         """Compute the inner product of the output photons with given MPS."""
         mps_state = self.get_mps(pulses)
         return tn.onedim.inner_product_mps(target_mps, mps_state)
+
+    def get_inner_prod_tmat(
+            self,
+            target_mps: tn.onedim.MatrixProductState,
+            pulses: List[pulse.Pulse]) -> complex:
+        # This function is just to check if the transfer matrix implementation
+        # of the MPS is consistent. It is more efficient to use the
+        # `get_inner_prod_tmat` function for actual computation.
+        mps_state = self.get_mps(pulses)
+        transfer_matrices = _get_transfer_matrix_list(target_mps, mps_state)
+        tmat = transfer_matrices[0]
+        for t in transfer_matrices[1:]:
+            tmat = tmat @ t
+        return tmat[0, 0]
 
     def _get_deriv_mps(
             self,
