@@ -51,7 +51,7 @@ class DirectParameterizedPulse(ParameterizedPulse):
         self._state = init_state
 
     def bounds(self) -> List[Tuple[float, float]]:
-        return np.array([(self._bounds[0], self._bounds[1])
+        return np.array([(np.min(self._bounds), np.max(self._bounds))
                          for _ in range(self.state().size)], dtype=float)
 
     def state(self) -> np.ndarray:
